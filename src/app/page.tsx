@@ -14,6 +14,7 @@ interface DealRow {
 export default function Home() {
   const [deals, setDeals] = useState<DealRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [dbError, setDbError] = useState(false);
   const [form, setForm] = useState({
     codeName: "",
     targetName: "",
@@ -26,9 +27,15 @@ export default function Home() {
   const [creating, setCreating] = useState(false);
 
   async function load() {
-    const res = await fetch("/api/deals");
-    setDeals(await res.json());
-    setLoading(false);
+    try {
+      const res = await fetch("/api/deals");
+      if (!res.ok) throw new Error("db");
+      setDeals(await res.json());
+    } catch {
+      setDbError(true);
+    } finally {
+      setLoading(false);
+    }
   }
   useEffect(() => {
     load();
@@ -62,6 +69,13 @@ export default function Home() {
           <div className="sub">Sell-side mandate intake → tiered, scored buyers list</div>
         </div>
       </div>
+
+      {dbError && (
+        <div className="banner">
+          Database not connected yet. The UI is live, but creating mandates needs a
+          Postgres <code>DATABASE_URL</code> — once it&apos;s set this banner disappears.
+        </div>
+      )}
 
       <div className="grid cols-2">
         <div className="card">
