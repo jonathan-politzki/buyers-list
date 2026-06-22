@@ -1,13 +1,13 @@
-// SQLite for zero-config local dev. For production, switch the provider to
-// "postgresql" and point DATABASE_URL at Postgres (no enums/arrays are used,
-// so the schema ports cleanly).
+// Postgres (works locally and on Vercel serverless). Point DATABASE_URL at any
+// Postgres instance — Neon, Vercel Postgres, Supabase, or local. No enums/arrays
+// are used, so the schema stays simple and portable.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 

@@ -1,9 +1,23 @@
 import { deriveSearchCriteria, generateRationales } from "./anthropic";
 import { sourceBuyers, sourceContacts } from "./apollo";
+import { sourceBuyersExa } from "./exa";
 import { pushToClay } from "./clay";
 import { prisma } from "./db";
 import { scoreBuyer } from "./scoring";
 import type { BuyerCandidate, TargetProfile } from "./types";
+
+// Merge candidates from multiple sources, deduping by normalized name.
+function dedupe(...lists: BuyerCandidate[][]): BuyerCandidate[] {
+  const seen = new Map<string, BuyerCandidate>();
+  for (const list of lists) {
+    for (const c of list) {
+      const key = c.name.toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (!key) continue;
+      if (!seen.has(key)) seen.set(key, c);
+    }
+  }
+  return Array.from(seen.values());
+}
 
 /**
  * Generate a buyers list for a deal:
@@ -44,8 +58,12 @@ export async function generateBuyersList(dealId: string) {
   // 1. criteria + thesis
   const { criteria, thesis } = await deriveSearchCriteria(profile);
 
-  // 2. source candidates
-  const candidates = await sourceBuyers(profile, criteria);
+  // 2. source candidates (Apollo/mock + Exa web discovery), deduped
+  const [apolloCands, exaCands] = await Promise.all([
+    sourceBuyers(profile, criteria),
+    sourceBuyersExa(profile, criteria),
+  ]);
+  const candidates = dedupe(exaCands, apolloCands);
 
   // 3. optional Clay enrichment (fire-and-forget)
   await pushToClay(deal.codeName, candidates);
