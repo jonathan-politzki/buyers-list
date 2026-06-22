@@ -8,26 +8,33 @@ function client(): Anthropic | null {
   return new Anthropic();
 }
 
-// Run a structured-output request and parse the JSON the model returns.
+// Ask for JSON and parse it. Prompt-based (not output_config) so it works
+// across SDK versions without depending on the structured-output param.
 async function structured<T>(
   c: Anthropic,
   system: string,
   user: string,
-  schema: Record<string, unknown>,
+  shapeHint: string,
   maxTokens = 4000,
 ): Promise<T> {
-  // output_config is cast through `any` to stay compatible across SDK minor
-  // versions; the wire shape is stable.
   const resp = await c.messages.create({
     model: MODEL,
     max_tokens: maxTokens,
-    thinking: { type: "adaptive" },
-    system,
+    system: `${system}\n\nRespond with ONLY valid minified JSON — no markdown, no code fences, no prose. ${shapeHint}`,
     messages: [{ role: "user", content: user }],
-    output_config: { format: { type: "json_schema", schema } },
-  } as any);
+  });
   const text = (resp.content as any[]).find((b) => b.type === "text")?.text ?? "{}";
-  return JSON.parse(text) as T;
+  return JSON.parse(cleanJson(text)) as T;
+}
+
+// Strip code fences / surrounding prose if the model adds them anyway.
+function cleanJson(s: string): string {
+  let t = s.trim();
+  if (t.startsWith("```")) t = t.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+  const first = Math.min(...["{", "["].map((c) => (t.indexOf(c) === -1 ? Infinity : t.indexOf(c))));
+  const last = Math.max(t.lastIndexOf("}"), t.lastIndexOf("]"));
+  if (first !== Infinity && last > first) t = t.slice(first, last + 1);
+  return t;
 }
 
 /**
@@ -41,19 +48,8 @@ export async function deriveSearchCriteria(
   if (!c) return heuristicCriteria(profile);
 
   try {
-    const schema = {
-      type: "object",
-      additionalProperties: false,
-      required: ["thesis", "keywords", "industries", "employeeMin", "geographies", "sponsorThesis"],
-      properties: {
-        thesis: { type: "string" },
-        keywords: { type: "array", items: { type: "string" } },
-        industries: { type: "array", items: { type: "string" } },
-        employeeMin: { type: "integer" },
-        geographies: { type: "array", items: { type: "string" } },
-        sponsorThesis: { type: "string" },
-      },
-    };
+    const shapeHint =
+      'Shape: {"thesis":string, "keywords":string[], "industries":string[], "employeeMin":number, "geographies":string[], "sponsorThesis":string}';
     const out = await structured<SearchCriteria & { thesis: string }>(
       c,
       "You are an M&A analyst at a mid-market investment bank building a sell-side buyers list. Be concise and concrete.",
@@ -70,11 +66,12 @@ Produce: (1) a one-paragraph buyer thesis (who acquires this and why),
 (4) a minimum employee count a strategic should have to plausibly acquire,
 (5) preferred buyer geographies,
 (6) the PE/sponsor thesis (platform vs add-on, sector focus).`,
-      schema,
+      shapeHint,
     );
     const { thesis, ...criteria } = out;
     return { criteria, thesis };
-  } catch {
+  } catch (err) {
+    console.error("[anthropic criteria error]", (err as any)?.status, (err as Error)?.message);
     return heuristicCriteria(profile);
   }
 }
@@ -91,25 +88,8 @@ export async function generateRationales(
   if (!c || buyers.length === 0) return templateRationales(profile, buyers);
 
   try {
-    const schema = {
-      type: "object",
-      additionalProperties: false,
-      required: ["rationales"],
-      properties: {
-        rationales: {
-          type: "array",
-          items: {
-            type: "object",
-            additionalProperties: false,
-            required: ["id", "rationale"],
-            properties: {
-              id: { type: "string" },
-              rationale: { type: "string" },
-            },
-          },
-        },
-      },
-    };
+    const shapeHint =
+      'Shape: {"rationales":[{"id":string,"rationale":string}]} — include every id exactly once.';
     const list = buyers
       .map(
         (b) =>
@@ -120,7 +100,7 @@ export async function generateRationales(
       c,
       "You are an M&A analyst. For each buyer, write ONE crisp sentence on why they fit this target. No fluff.",
       `Target: ${profile.industry} — ${profile.description} (${profile.geography ?? "US"})\n\nBuyers:\n${list}`,
-      schema,
+      shapeHint,
       Math.min(8000, 400 + buyers.length * 120),
     );
     const map: Record<string, string> = {};

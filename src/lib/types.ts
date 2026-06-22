@@ -60,3 +60,28 @@ export interface ScoreResult {
   tier: "A" | "B" | "C";
   dimensions: Record<string, number>;
 }
+
+// A fully scored, rationale'd, contact-enriched buyer returned to the client.
+export interface GeneratedBuyer {
+  id: string;
+  name: string;
+  type: BuyerType;
+  industry?: string;
+  size?: string;
+  location?: string;
+  website?: string;
+  description?: string;
+  source: string;
+  score: number;
+  tier: "A" | "B" | "C";
+  rationale: string;
+  dimensions: Record<string, number>;
+  contacts: ContactCandidate[];
+}
+
+export interface GeneratedList {
+  thesis: string;
+  criteria: SearchCriteria;
+  buyers: GeneratedBuyer[];
+  sources: string[]; // which data sources were live (anthropic, apollo, exa, mock)
+}

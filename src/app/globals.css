@@ -100,3 +100,43 @@ tr:hover td { background: rgba(255,255,255,0.015); }
 }
 .rejected td { opacity: 0.4; }
 select.tiny { width: auto; padding: 4px 6px; font-size: 12px; }
+
+/* App layout: sidebar + main */
+.app-grid { display: grid; grid-template-columns: 320px 1fr; gap: 18px; align-items: start; }
+@media (max-width: 880px) { .app-grid { grid-template-columns: 1fr; } }
+.sidebar { position: sticky; top: 20px; }
+
+/* Saved-mandate chips */
+.mandate {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
+  margin-bottom: 8px; cursor: pointer; background: var(--panel-2);
+}
+.mandate:hover { border-color: var(--accent); }
+.mandate.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.mandate .x { color: var(--muted); font-size: 12px; padding: 2px 6px; border-radius: 6px; }
+.mandate .x:hover { color: var(--danger); }
+
+/* Stat cards */
+.stats { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 4px; }
+.stat {
+  flex: 1; min-width: 90px; background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 9px; padding: 10px 12px;
+}
+.stat .n { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.stat .l { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 2px; }
+
+/* Score bar */
+.scorewrap { display: flex; align-items: center; gap: 8px; }
+.scorebar { width: 46px; height: 6px; border-radius: 999px; background: var(--panel-2); overflow: hidden; }
+.scorebar > span { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), #7db0ff); }
+
+.emptystate {
+  border: 1px dashed var(--border); border-radius: 12px; padding: 48px 24px;
+  text-align: center; color: var(--muted);
+}
+.srcdot { display: inline-block; width: 7px; height: 7px; border-radius: 999px; background: var(--tier-a); margin-right: 5px; }
+.spin { display: inline-block; width: 13px; height: 13px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: -2px; margin-right: 6px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+.section-title { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 10px; }

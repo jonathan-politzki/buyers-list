@@ -2,9 +2,13 @@ import { deriveSearchCriteria, generateRationales } from "./anthropic";
 import { sourceBuyers, sourceContacts } from "./apollo";
 import { sourceBuyersExa } from "./exa";
 import { pushToClay } from "./clay";
-import { prisma } from "./db";
 import { scoreBuyer } from "./scoring";
-import type { BuyerCandidate, TargetProfile } from "./types";
+import type {
+  BuyerCandidate,
+  GeneratedBuyer,
+  GeneratedList,
+  TargetProfile,
+} from "./types";
 
 // Merge candidates from multiple sources, deduping by normalized name.
 function dedupe(...lists: BuyerCandidate[][]): BuyerCandidate[] {
@@ -20,45 +24,20 @@ function dedupe(...lists: BuyerCandidate[][]): BuyerCandidate[] {
 }
 
 /**
- * Generate a buyers list for a deal:
+ * Generate a buyers list for a target profile — fully in-memory, no database.
  *   1. Derive search criteria + buyer thesis (Claude or heuristic)
- *   2. Source strategics + sponsors (Apollo or mock)
+ *   2. Source strategics + sponsors (Apollo + Exa, or mock), deduped
  *   3. (optional) push candidates to Clay for waterfall enrichment
  *   4. Score + tier each candidate (rules-based)
  *   5. Write a fit rationale per buyer (Claude or template)
  *   6. Enrich top-tier buyers with contacts
- *   7. Persist buyers + list entries
- *
- * Synchronous for the MVP. Production moves steps 2-6 to a background queue
- * (see README §Build phases).
+ * Returns the complete list as JSON for the client to hold/curate.
  */
-export async function generateBuyersList(dealId: string) {
-  const deal = await prisma.deal.findUnique({ where: { id: dealId } });
-  if (!deal) throw new Error("deal not found");
-
-  await prisma.deal.update({
-    where: { id: dealId },
-    data: { status: "generating" },
-  });
-
-  // Clear any prior run so re-generation is idempotent.
-  await prisma.listEntry.deleteMany({ where: { dealId } });
-
-  const profile: TargetProfile = {
-    codeName: deal.codeName,
-    targetName: deal.targetName,
-    industry: deal.industry,
-    description: deal.description,
-    geography: deal.geography,
-    revenueBand: deal.revenueBand,
-    ebitdaBand: deal.ebitdaBand,
-    evBand: deal.evBand,
-  };
-
+export async function runPipeline(profile: TargetProfile): Promise<GeneratedList> {
   // 1. criteria + thesis
   const { criteria, thesis } = await deriveSearchCriteria(profile);
 
-  // 2. source candidates (Apollo/mock + Exa web discovery), deduped
+  // 2. source candidates (Apollo/mock + Exa), deduped
   const [apolloCands, exaCands] = await Promise.all([
     sourceBuyers(profile, criteria),
     sourceBuyersExa(profile, criteria),
@@ -66,20 +45,29 @@ export async function generateBuyersList(dealId: string) {
   const candidates = dedupe(exaCands, apolloCands);
 
   // 3. optional Clay enrichment (fire-and-forget)
-  await pushToClay(deal.codeName, candidates);
+  await pushToClay(profile.codeName, candidates);
 
-  // 4. score + tier
-  const scored = candidates.map((candidate) => ({
-    candidate,
-    score: scoreBuyer(profile, criteria, candidate),
-  }));
-  scored.sort((a, b) => b.score.score - a.score.score);
+  // 4. score + tier, then sort
+  const scored = candidates
+    .map((candidate) => ({ candidate, score: scoreBuyer(profile, criteria, candidate) }))
+    .sort((a, b) => b.score.score - a.score.score)
+    .map((s, i) => ({ ...s, id: `b${i}_${slug(s.candidate.name)}` }));
 
-  // 5. rationales (batched). Persist buyers first to get stable ids.
-  const persisted: { id: string; candidate: BuyerCandidate; score: typeof scored[number]["score"] }[] = [];
-  for (const s of scored) {
-    const buyer = await prisma.buyer.create({
-      data: {
+  // 5. rationales (batched)
+  const rationales = await generateRationales(
+    profile,
+    scored.map((s) => ({ id: s.id, candidate: s.candidate })),
+  );
+
+  // 6. contacts for top tiers (A and B), in parallel
+  const buyers: GeneratedBuyer[] = await Promise.all(
+    scored.map(async (s) => {
+      const contacts =
+        s.score.tier === "A" || s.score.tier === "B"
+          ? await sourceContacts(s.candidate.name, s.candidate.type)
+          : [];
+      return {
+        id: s.id,
         name: s.candidate.name,
         type: s.candidate.type,
         industry: s.candidate.industry,
@@ -87,56 +75,22 @@ export async function generateBuyersList(dealId: string) {
         location: s.candidate.location,
         website: s.candidate.website,
         description: s.candidate.description,
-        signals: s.candidate.signals ? JSON.stringify(s.candidate.signals) : null,
         source: s.candidate.source,
-      },
-    });
-    persisted.push({ id: buyer.id, candidate: s.candidate, score: s.score });
-  }
-
-  const rationales = await generateRationales(
-    profile,
-    persisted.map((p) => ({ id: p.id, candidate: p.candidate })),
+        score: s.score.score,
+        tier: s.score.tier,
+        rationale: rationales[s.id] ?? "",
+        dimensions: s.score.dimensions,
+        contacts,
+      };
+    }),
   );
 
-  // 6. contacts for top tiers (A and B), then 7. list entries
-  for (const p of persisted) {
-    if (p.score.tier === "A" || p.score.tier === "B") {
-      const contacts = await sourceContacts(p.candidate.name, p.candidate.type);
-      for (const c of contacts) {
-        await prisma.contact.create({
-          data: {
-            buyerId: p.id,
-            name: c.name,
-            title: c.title,
-            role: c.role,
-            email: c.email,
-            phone: c.phone,
-          },
-        });
-      }
-    }
+  const sources = Array.from(new Set(buyers.map((b) => b.source)));
+  if (process.env.ANTHROPIC_API_KEY) sources.push("anthropic");
 
-    await prisma.listEntry.create({
-      data: {
-        dealId,
-        buyerId: p.id,
-        score: p.score.score,
-        tier: p.score.tier,
-        rationale: rationales[p.id] ?? null,
-        dimensions: JSON.stringify(p.score.dimensions),
-      },
-    });
-  }
+  return { thesis, criteria, buyers, sources };
+}
 
-  await prisma.deal.update({
-    where: { id: dealId },
-    data: {
-      status: "ready",
-      buyerThesis: thesis,
-      searchCriteria: JSON.stringify(criteria),
-    },
-  });
-
-  return { count: persisted.length };
+function slug(s: string) {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 24);
 }
